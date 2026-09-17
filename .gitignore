@@ -1,0 +1,33 @@
+# 密钥与本地配置
+.env
+.idea/
+.vscode/
+.claude/
+.workbuddy/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# 运行时产物
+uploaded_files/
+server_vector_db/
+vector_db/
+models/
+runs/
+reports/
+state/
+*.sqlite3
+
+# 评测与构建产物
+result/
+.backup/
+
+# 知识库源文件：自行放入自己的 PDF
+data/
+
+# 仅本地保留、不对外发布
+docs/resume-*.md
+scripts/0[1-5]_*.sh

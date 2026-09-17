@@ -1,0 +1,36 @@
+services:
+  agentic-rag:
+    build: .
+    init: true
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      API_KEY: "${API_KEY:-}"
+      MCP_ALLOWED_HOSTS: "${MCP_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*,[::1]:*}"
+      MCP_ALLOWED_ORIGINS: "${MCP_ALLOWED_ORIGINS:-http://127.0.0.1:*,http://localhost:*,http://[::1]:*}"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - ./uploaded_files:/app/uploaded_files
+      - ./server_vector_db:/app/server_vector_db
+      - ./state:/app/state
+      - ./runs:/app/runs
+      - ./models:/app/models
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/v1/health/live', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"

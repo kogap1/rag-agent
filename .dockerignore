@@ -1,0 +1,14 @@
+.git
+.env
+.idea
+.pytest_cache
+__pycache__
+*.pyc
+models
+uploaded_files
+server_vector_db
+state
+runs
+reports
+result
+
