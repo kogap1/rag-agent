@@ -30,9 +30,10 @@ streamlit run app.py          # http://localhost:8501
 也可用一条龙脚本，会自动补 `.env` 与 API Key，并做离线自检：
 
 ```bash
-bash scripts/run_local.sh check    # 环境、依赖与数据自检
-bash scripts/run_local.sh demo     # env + data + 建库 + 离线自检
-bash scripts/run_local.sh ui       # 界面
+bash scripts/local.sh check    # 环境、依赖与数据自检
+bash scripts/local.sh demo     # env + data + 建库 + 离线自检
+bash scripts/local.sh ui       # 界面
+bash scripts/local.sh run      # 一条龙：自检→建库→评测→起服务→在线验收
 ```
 
 以 API 方式运行：
@@ -57,6 +58,7 @@ uvicorn api:app --host 127.0.0.1 --port 8080
 | `agentic_rag/evaluation.py` / `baseline.py` | 指标计算 / 单次 RAG 基线 |
 | `api.py` / `app.py` | FastAPI 服务入口 / Streamlit UI |
 | `evaluate.py` / `run_ablation.py` | Benchmark CLI / 一键 2×2 消融矩阵 |
+| `scripts/local.sh` / `scripts/server.sh` | 本地一条龙 / 服务器部署（共用 `scripts/lib.sh`） |
 
 ## 评测与测试
 

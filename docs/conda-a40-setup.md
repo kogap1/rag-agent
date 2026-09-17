@@ -21,7 +21,7 @@
 
 ## 二、方式 A（推荐）：复用项目自带脚本，只覆盖索引地址
 
-`create_conda_env.sh` 已包含建环境 → 装 PyTorch → 装 `requirements.txt` → `pip check` → 导入与 CUDA 实算自检，并会校验驱动版本（要求 ≥ 450.80.02，535 满足）。
+`scripts/server.sh env` 已包含建环境 → 装 PyTorch → 装 `requirements.txt` → `pip check` → 导入与 CUDA 实算自检，并会校验驱动版本（要求 ≥ 450.80.02，535 满足）。
 
 ```bash
 # 1) 把项目放到服务器（二选一）
@@ -30,7 +30,7 @@
 #    或直接在服务器上用 git clone / 解压压缩包
 
 cd /data/apps/rag-agent-upgrade
-chmod +x create_conda_env.sh run_server.sh
+chmod +x scripts/*.sh
 
 # 2) 建环境（Python 3.10 + torch 2.6.0 cu124 + 全部依赖，含测试依赖）
 CONDA_ENV_NAME=rag-agent \
@@ -39,7 +39,7 @@ TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 \
 PYTHON_VERSION=3.10 \
 REQUIRE_CUDA=1 \
 INSTALL_DEV=1 \
-./create_conda_env.sh
+bash scripts/server.sh env
 ```
 
 脚本最后会打印 `torch=2.6.0+cu124`、`cuda_available=True`、显卡名与一次 GPU 实算结果，作为环境可用证据。
@@ -77,10 +77,10 @@ conda activate rag-agent
 cd /data/apps/rag-agent-upgrade
 
 # 依赖 + GPU 自检
-bash scripts/run_local.sh check
+bash scripts/local.sh check
 
 # 离线端到端验证：语法检查 + 全量测试 + 不下载模型的冒烟
-bash scripts/verify.sh
+bash scripts/local.sh verify
 ```
 
 期望结果：`compileall 通过`、`pytest 44 passed`、`离线冒烟全部通过`，且 `check` 打印 `GPU: NVIDIA A40 / 46.0 GB`。
@@ -101,13 +101,13 @@ cp .env.example .env
 | `LLM_BACKEND` | `local` | 若要拆成独立推理服务，改成 `openai_compatible` 并配 `LLM_API_BASE`（vLLM 等） |
 | `API_MAX_CONCURRENCY` | `2`~`4` | 显存充裕，可放开并发；评测时建议回到 `1` 保持可比 |
 | `MAX_UPLOAD_BYTES` | 保持默认 | 服务端可放宽，但不要超过反向代理的上传限制 |
-| `REQUIRE_CUDA` | `1` | `run_server.sh` 启动前会做 CUDA 检查 |
+| `REQUIRE_CUDA` | `1` | `scripts/server.sh` 启动前会做 CUDA 检查 |
 
 启动服务：
 
 ```bash
 # 只复用已有环境，不创建环境、不安装依赖
-CONDA_ENV_NAME=rag-agent REQUIRE_CUDA=1 bash run_server.sh
+CONDA_ENV_NAME=rag-agent REQUIRE_CUDA=1 bash scripts/server.sh serve
 ```
 
 模型规模与显存对照（bf16，单卡 A40 46GB）：
@@ -132,25 +132,25 @@ Embedding（BGE-M3，fp32）约 2.3GB、Reranker（bge-reranker-base）约 0.6GB
 | 想彻底回避 12.x 兼容性讨论 | 改用 cu118：把上面所有 `cu124` 换成 `cu118`。功能一致，只是少了 12.x 的新特性 |
 | 下载模型慢 | `MODEL_CACHE_DIR` 指向大盘目录（默认 `models/`）。首次建库需从 ModelScope 拉取 BGE-M3 + Reranker + 生成模型 |
 | 多卡机器上显存被摊开 | 必须设 `CUDA_VISIBLE_DEVICES=0`；不设时 `device_map="auto"` 会跨卡切分 |
-| `conda run` 报 `unrecognized arguments: --no-capture-output` | 旧版 conda（< 4.9）不支持该参数。`create_conda_env.sh` 与 `run_server.sh` 已改为**直接从 `conda env list` 解析环境前缀、调用环境自带解释器**，完全不使用 `conda run`；升级到最新脚本即可，无需升级 conda |
+| `conda run` 报 `unrecognized arguments: --no-capture-output` | 旧版 conda（< 4.9）不支持该参数。`scripts/server.sh` 与 `scripts/local.sh`（共用 `scripts/lib.sh`）已改为**直接从 `conda env list` 解析环境前缀、调用环境自带解释器**，完全不使用 `conda run`；升级到最新脚本即可，无需升级 conda |
 
 ---
 
 ## 七、建库、评测与服务（环境就绪后）
 
-> 从零到服务可用的**分阶段可复制命令**，见 [服务器部署流程命令](server-deploy-runbook.md)；也可直接执行幂等脚本 `bash scripts/deploy_server.sh all`。
+> 从零到服务可用的**分阶段可复制命令**，见 [服务器部署流程命令](server-deploy-runbook.md)；也可直接执行幂等脚本 `bash scripts/server.sh all`。
 
 ```bash
 conda activate rag-agent
 cd /data/apps/rag-agent-upgrade
 
 # 一键全流程（自检→配置→数据→离线自检→下载模型建库→评测→起服务→接口验收）
-bash scripts/run_all.sh
+CONDA_ENV_NAME=rag-agent bash scripts/local.sh run
 
 # 或分步
-bash scripts/run_local.sh build     # 建/重建向量知识库
-bash scripts/run_local.sh eval      # 固定问题集评测，报告见 reports/
-bash scripts/run_server.sh          # 生产式启动（CUDA 检查 + 健康检查）
-bash scripts/run_all.sh status      # 查看服务与知识库状态
-bash scripts/run_all.sh stop        # 停止服务
+CONDA_ENV_NAME=rag-agent bash scripts/local.sh build   # 建/重建向量知识库
+CONDA_ENV_NAME=rag-agent bash scripts/local.sh eval    # 固定问题集评测，报告见 reports/
+bash scripts/server.sh serve                          # 生产式启动（0.0.0.0，CUDA 检查 + 健康检查）
+bash scripts/server.sh status                         # 查看服务与知识库状态
+bash scripts/server.sh stop                           # 停止服务
 ```

@@ -51,7 +51,7 @@ git clone <你的仓库地址> /data/apps/rag-agent-upgrade
 
 # 进入项目并给脚本执行权限
 cd /data/apps/rag-agent-upgrade
-chmod +x create_conda_env.sh run_server.sh scripts/*.sh
+chmod +x scripts/*.sh
 ```
 
 知识库源 PDF 用 `scp` 放到 `data/`：
@@ -64,7 +64,7 @@ scp ./your-rules.pdf user@your-server:/data/apps/rag-agent-upgrade/data/
 
 ## 3. 建 Conda 环境（完整命令行）
 
-复用项目自带的 `create_conda_env.sh`，它会建环境 → 装 PyTorch → 装 `requirements.txt` → `pip check` → 导入与 CUDA 实算自检。
+复用项目自带的 `scripts/server.sh env`，它会建环境 → 装 PyTorch → 装 `requirements.txt` → `pip check` → 导入与 CUDA 实算自检。
 
 ```bash
 cd /data/apps/rag-agent-upgrade
@@ -75,7 +75,7 @@ TORCH_VERSION=2.6.0 \
 TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 \
 REQUIRE_CUDA=1 \
 INSTALL_DEV=1 \
-./create_conda_env.sh
+bash scripts/server.sh env
 ```
 
 期望输出（关键三行）：
@@ -147,7 +147,7 @@ grep -E '^(CUDA_VISIBLE_DEVICES|LLM_MODEL|API_MAX_CONCURRENCY|CONDA_ENV_NAME|REQ
 | `DEVICE` | `auto`（默认） | 自动选 cuda；bf16 由代码按 `is_bf16_supported()` 自动判定 |
 | `LLM_MODEL` | `qwen/Qwen2.5-7B-Instruct` | bf16 约 15GB，单卡 46GB 余量充足 |
 | `API_MAX_CONCURRENCY` | `2` | 本地 Transformers/Embedding/Reranker 共用模型实例，别一次放太开 |
-| `REQUIRE_CUDA` | `1` | `run_server.sh` 启动前做 CUDA 检查，禁止静默回退 CPU |
+| `REQUIRE_CUDA` | `1` | `scripts/server.sh` 启动前做 CUDA 检查，禁止静默回退 CPU |
 
 > 改 `LLM_MODEL` **不需要重建向量库**：向量库只依赖 Embedding 与 Reranker。
 
@@ -157,7 +157,7 @@ grep -E '^(CUDA_VISIBLE_DEVICES|LLM_MODEL|API_MAX_CONCURRENCY|CONDA_ENV_NAME|REQ
 
 ```bash
 cd /data/apps/rag-agent-upgrade
-CONDA_ENV_NAME=rag-agent bash scripts/verify.sh
+CONDA_ENV_NAME=rag-agent bash scripts/local.sh verify
 ```
 
 会依次跑：语法检查 → 全量 pytest → 离线端到端冒烟（不下载模型）。
@@ -202,22 +202,21 @@ PY
 
 ```bash
 cd /data/apps/rag-agent-upgrade
-CONDA_ENV_NAME=rag-agent REQUIRE_CUDA=1 PUBLIC_HOST=rag.example.com bash run_server.sh
+CONDA_ENV_NAME=rag-agent REQUIRE_CUDA=1 PUBLIC_HOST=rag.example.com bash scripts/server.sh serve
 ```
 
-脚本会做离线依赖导入 + CUDA 检查，不通过直接停止并列出原因；通过后后台启动 Uvicorn（`0.0.0.0:8080`，单 worker），并轮询存活与就绪探针。
+`serve` 只复用、不创建环境；环境解析不到时会直接停止并说明原因。启动前做依赖导入与 CUDA 检查，通过后后台启动 Uvicorn（`0.0.0.0:8080`，单 worker），并轮询存活与就绪探针。
 
 期望输出：
 
 ```text
-Agentic RAG 已启动并通过健康检查
-REST API: http://<server>:8080/docs
-MCP:      http://<server>:8080/mcp/
-Metrics:  http://<server>:8080/metrics
-进程PID:   <pid>
-查看日志: tail -f runs/uvicorn.log
-停止服务: kill <pid>
+▶ 5/6 启动 FastAPI 服务（0.0.0.0:8080）
+   ✅ 存活检查通过（等待 8s）
+   ✅ 就绪检查通过（首次真实问答仍会懒加载 Embedding/Reranker/LLM，可能等待数十秒）
+   ·  PID 12345 ｜ 日志 tail -f runs/service.log
 ```
+
+对外地址由验收阶段打印（REST `http://<server>:8080/docs`、MCP `http://<server>:8080/mcp/`、Metrics `http://<server>:8080/metrics`）。日志 `tail -f runs/service.log`，停止服务 `bash scripts/server.sh stop`。
 
 > 注意：`/v1/health/live` 不加载模型；**首次真实问答**才会懒加载 Embedding/Reranker/LLM，可能等待数十秒，不是卡死。
 
@@ -262,7 +261,7 @@ curl -s -o /dev/null -w 'no_key=%{http_code}\n' -X POST -H 'Content-Type: applic
 ```bash
 # 生成单元文件（自动填好绝对路径与解释器）
 cd /data/apps/rag-agent-upgrade
-bash scripts/deploy_server.sh systemd
+bash scripts/server.sh systemd
 
 # 安装并启用
 sudo cp deploy/rag-agent.service /etc/systemd/system/rag-agent.service
@@ -274,7 +273,7 @@ systemctl status rag-agent --no-pager
 先停掉手工启动的进程，避免争抢 8080 端口：
 
 ```bash
-bash scripts/deploy_server.sh stop
+bash scripts/server.sh stop
 ```
 
 日志与重启：
@@ -328,43 +327,46 @@ sed -i "s|^MCP_ALLOWED_ORIGINS=.*|MCP_ALLOWED_ORIGINS=http://127.0.0.1:*,http://
 
 ## 11. 可重复执行的一键脚本
 
-上面的流程已固化为 `scripts/deploy_server.sh`，幂等，可反复执行：
+上面的流程已固化为 `scripts/server.sh`，幂等，可反复执行：
 
 ```bash
 cd /data/apps/rag-agent-upgrade
 
 # 全流程：环境 → 配置 → 校验 → 建库 → 起服务 → 验收
-PUBLIC_HOST=rag.example.com bash scripts/deploy_server.sh all
+PUBLIC_HOST=rag.example.com bash scripts/server.sh all
 
 # 或分阶段（每步可单独重跑）
-bash scripts/deploy_server.sh env        # 系统检查 + 建/复用 Conda 环境
-bash scripts/deploy_server.sh config     # 写 .env（A40 推荐参数 + API Key + MCP 白名单）
-bash scripts/deploy_server.sh verify     # 语法 + pytest + 离线冒烟
-bash scripts/deploy_server.sh build      # 下载模型 + 建向量库
-bash scripts/deploy_server.sh serve      # 启动服务并通过健康检查
-bash scripts/deploy_server.sh accept     # 在线接口验收
-bash scripts/deploy_server.sh systemd    # 生成 systemd 单元
+bash scripts/server.sh env        # 系统检查 + 建/复用 Conda 环境
+bash scripts/server.sh config     # 写 .env（A40 推荐参数 + API Key + MCP 白名单）
+bash scripts/server.sh verify     # 语法 + pytest + 离线冒烟
+bash scripts/server.sh build      # 下载模型 + 建向量库
+bash scripts/server.sh serve      # 启动服务并通过健康检查
+bash scripts/server.sh accept     # 在线接口验收
+bash scripts/server.sh systemd    # 生成 systemd 单元
+bash scripts/server.sh docker     # 改用 Docker Compose 部署
 
-bash scripts/deploy_server.sh status     # 状态总览（服务 / 环境 / 知识库）
-bash scripts/deploy_server.sh logs       # tail -f 服务日志
-bash scripts/deploy_server.sh stop       # 停止服务
+bash scripts/server.sh status     # 状态总览（服务 / 环境 / 知识库）
+bash scripts/server.sh logs       # tail -f 服务日志
+bash scripts/server.sh stop       # 停止服务
 ```
 
 环境已就绪、只想重跑后面几步时：
 
 ```bash
-SKIP_ENV_CREATE=1 SKIP_BUILD=1 bash scripts/deploy_server.sh all
+SKIP_ENV_CREATE=1 SKIP_BUILD=1 bash scripts/server.sh all
 ```
+
+脚本用法与共享函数见 `bash scripts/server.sh help` 与 `scripts/lib.sh`；本地侧的配套入口是 `scripts/local.sh`。
 
 ### 关于沿用已有的 Conda 环境
 
 `CONDA_ENV_NAME` 默认是 `rag-agent`。如果服务器上已经有装好依赖的环境（例如 `rag_a40`），显式指定即可复用，省掉一次约 2.5GB 的 CUDA 轮子下载：
 
 ```bash
-CONDA_ENV_NAME=rag_a40 PUBLIC_HOST=rag.example.com bash scripts/deploy_server.sh all
+CONDA_ENV_NAME=rag_a40 PUBLIC_HOST=rag.example.com bash scripts/server.sh all
 ```
 
-脚本会先做一次**只读**依赖探测：依赖齐全就直接复用；不齐才调用 `create_conda_env.sh` 补齐（该脚本复用已存在环境，不会重建）。**注意补齐动作会往该环境里装 torch / requirements**——若 `rag_a40` 是给别的项目用的，请不要复用，保持默认让它新建 `rag-agent`。
+`env` 阶段会先做一次**只读**依赖探测：依赖齐全就直接复用；不齐才进入安装补齐。**注意补齐动作会往该环境里装 torch / requirements**——若 `rag_a40` 是给别的项目用的，请不要复用，保持默认让它新建 `rag-agent`。只想复用、绝不动环境时用 `serve`（它只解析环境、不安装任何东西）。
 
 想先确认那个环境里到底有什么（不依赖 `conda run`，老版本 conda 也能跑）：
 
@@ -380,14 +382,14 @@ CONDA_ENV_NAME=rag_a40 PUBLIC_HOST=rag.example.com bash scripts/deploy_server.sh
 ```text
    ❌ 部署中断：第 199 行执行失败（退出码 1）
       失败命令：nvidia-smi ...
-      文件位置：scripts/deploy_server.sh
-      查看该行：sed -n 199p scripts/deploy_server.sh
+      文件位置：scripts/server.sh
+      查看该行：sed -n 199p scripts/server.sh
 ```
 
 看到这段直接按行号去看那一行即可，不会再出现「跑到一半静默回到提示符」。若在更早拷过去的副本上遇到静默中断，用跟踪模式拿真实位置：
 
 ```bash
-bash -x scripts/deploy_server.sh env 2>&1 | tail -30
+bash -x scripts/server.sh env 2>&1 | tail -30
 ```
 
 ---
@@ -396,11 +398,11 @@ bash -x scripts/deploy_server.sh env 2>&1 | tail -30
 
 ```bash
 # 服务状态与进程
-bash scripts/deploy_server.sh status
-kill -0 "$(cat runs/uvicorn.pid)" && echo running
+bash scripts/server.sh status
+kill -0 "$(cat runs/service.pid)" && echo running
 
 # 日志
-tail -f runs/uvicorn.log            # 手工启动
+tail -f runs/service.log            # 手工启动
 journalctl -u rag-agent -f          # systemd 启动
 tail -f runs/agent_runs.jsonl       # Agent 轨迹（run_id / 每步 record_id / evidence）
 
@@ -409,7 +411,7 @@ nvidia-smi                          # 显存与利用率
 nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv -l 2
 
 # 评测（生成 reports/*.json 与 *.md）
-bash scripts/run_local.sh eval
+CONDA_ENV_NAME=rag-agent bash scripts/local.sh eval
 python run_ablation.py --repeats 3 --dataset eval/dataset.example.jsonl
 ```
 
@@ -422,24 +424,24 @@ python run_ablation.py --repeats 3 --dataset eval/dataset.example.jsonl
 | `torch.cuda.is_available()=False` | 装到了 CPU 轮子。重装：`python -m pip uninstall -y torch && python -m pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124` |
 | 显存被摊到 4 张卡 | `.env` 未设 `CUDA_VISIBLE_DEVICES=0`。改完后必须**重启进程**（CUDA 在首次初始化时读取该变量） |
 | `CUDA error: no kernel image is available` | 轮子与架构不匹配。确认装的是 cu124 官方轮子而非 `+cpu` 版本 |
-| `run_server.sh` 报「未指定可复用的 Conda 环境」 | 未激活环境且未传环境名。用 `CONDA_ENV_NAME=rag-agent bash run_server.sh` |
+| `scripts/server.sh serve` 报「未找到可复用的 Conda 环境」 | 未激活环境且未传环境名。用 `CONDA_ENV_NAME=rag-agent bash scripts/server.sh serve`，或先执行 `bash scripts/server.sh env` 建环境 |
 | 启动报缺少模块 | 环境没装全依赖。`"$(conda env list \| awk '$1=="rag-agent"{print $NF}')/bin/python" -m pip install -r requirements.txt` |
-| `conda: error: unrecognized arguments: --no-capture-output` | 旧版 conda 不认这个参数。脚本已改为**直接调用环境自带解释器**，不再使用 `conda run`；拉取最新 `create_conda_env.sh` / `run_server.sh` 即可 |
-| `/v1/health/ready` 返回非 200 | 看 `runs/uvicorn.log`；就绪探针会校验 SQLite 目录，确认 `state/` 可写 |
+| `conda: error: unrecognized arguments: --no-capture-output` | 旧版 conda 不认这个参数。脚本已改为**直接调用环境自带解释器**，不再使用 `conda run`；拉取最新 `scripts/server.sh` / `scripts/lib.sh` 即可 |
+| `/v1/health/ready` 返回非 200 | 看 `runs/service.log`；就绪探针会校验 SQLite 目录，确认 `state/` 可写 |
 | 首次问答很慢或超时 | Embedding/Reranker/7B 懒加载。nginx `proxy_read_timeout` 调到 300s |
 | 下载模型慢 | 换 `MODEL_CACHE_DIR` 到大盘；或先手工 `modelscope download` 到对应目录 |
 | `/mcp/` 返回 400/403 | 访问用的 host 不在 `MCP_ALLOWED_HOSTS`。按第 4 节加入域名后重启 |
-| 端口被占 | `bash scripts/deploy_server.sh stop`；或查 `ss -lntp \| grep 8080` |
+| 端口被占 | `bash scripts/server.sh stop`；或查 `ss -lntp \| grep 8080` |
 | 上传报 413 | nginx `client_max_body_size` 小于 `MAX_UPLOAD_BYTES`（50MiB） |
-| 脚本「跑到一半静默回到提示符」 | 旧副本才会有。当前脚本装了 `ERR` trap，会打印行号+命令+退出码；按行号定位，或用 `bash -x scripts/deploy_server.sh env 2>&1 \| tail -30` |
-| 想复用已有环境却触发了安装 | `CONDA_ENV_NAME=<已有环境>` 且依赖探测不通过时，会调用 `create_conda_env.sh` 补齐。若不想动那个环境，去掉 `CONDA_ENV_NAME` 让它新建 |
+| 脚本「跑到一半静默回到提示符」 | 旧副本才会有。当前脚本装了 `ERR` trap，会打印行号+命令+退出码；按行号定位，或用 `bash -x scripts/server.sh env 2>&1 \| tail -30` |
+| 想复用已有环境却触发了安装 | `CONDA_ENV_NAME=<已有环境>` 且依赖探测不通过时，`env` 阶段会往该环境补齐依赖。若不想动那个环境，改用 `serve`（只解析环境、不安装） |
 
 ---
 
 ## 14. 验收清单（部署完成的判定）
 
 - [ ] `nvidia-smi` 显示只有 1 张卡被本服务占用（而非 4 张均沾）
-- [ ] `scripts/verify.sh` 输出 `全部验证通过。`
+- [ ] `scripts/local.sh verify` 输出 `全部验证通过。`
 - [ ] `/v1/documents` 中目标文档 `status=active` 且 `chunk_count>0`
 - [ ] `/v1/query` 返回 `grounded=true` 且引用到「来源，第 N 页」
 - [ ] 无 Key 访问 `/v1/query` 返回 `401`
